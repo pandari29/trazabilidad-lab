@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trazabilidad de Producción</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:16px system-ui,Arial,sans-serif;background:#f3f4f6;color:#111}
+header{position:sticky;top:0;z-index:5;background:#1f2937;color:#fff;padding:10px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between}
+#clk{font:700 22px monospace}#net{font-size:20px;color:#9ca3af}
+main{padding:10px;max-width:680px;margin:auto}
+.card{background:#fff;border-radius:10px;padding:12px;margin-bottom:10px;box-shadow:0 1px 3px #0002}
+h2{margin:0 0 8px;font-size:17px}
+button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:12px;background:#2563eb;color:#fff;margin:3px 0;width:100%}
+button.s{width:auto;padding:7px 11px;margin:0}button.r{background:#dc2626}button.g{background:#16a34a}button.y{background:#d97706}button.x{background:#6b7280}
+input,select{font:inherit;padding:10px;width:100%;margin:3px 0;border:1px solid #ccc;border-radius:8px}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between;border-top:1px solid #eee;padding:6px 0}
+.ban{background:#dc2626;color:#fff;padding:12px;border-radius:10px;margin-bottom:10px;font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:4px;border-bottom:1px solid #eee;text-align:left}
+.ok{color:#16a34a;font-weight:700}.no{color:#dc2626;font-weight:700}small{color:#666}
+#toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:10px 16px;border-radius:20px;display:none;z-index:9}
+</style></head><body>
+<header><b>Trazabilidad</b><span id="clk">--:--</span><span><span id="pend"></span> <span id="net">●</span> <a href="#" onclick="logout()" style="color:#fff">Salir</a></span></header>
+<main id="app"></main><div id="toast"></div>
+<script>
+const API="https://script.google.com/macros/s/AKfycbx-WUk9ZkCyiSYPmZn4s6qBL3Thk7cSx7nOamifxFYiBiEM77htYLVa3VU-5MptyN81Sw/exec";   // <-- cambia solo esto
+const COL={azul:'#2563eb',amarillo:'#eab308',naranja:'#f97316',rosado:'#ec4899',morado:'#7c3aed',gris:'#6b7280'};
+const $=s=>document.querySelector(s),G=i=>document.getElementById(i);
+const ld=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))||d}catch(e){return d}};
+const st=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+let U=ld('u',null),Q=ld('q',[]),S=null,busy=false,view={};
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const pad=n=>String(n).padStart(2,'0'),hm=t=>new Date(t).toLocaleTimeString('es-BO');
+function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2000)}
+function net(ok){$('#net').style.color=ok?'#22c55e':'#ef4444'}
+const call=async ev=>(await fetch(API,{method:'POST',body:JSON.stringify({id_op:U.id_op,pin:U.pin,events:ev})})).json();
+
+async function login(){
+  const id=G('i').value,pin=G('p').value;U={id_op:id,pin:pin};
+  try{const r=await call([]);if(!r.ok){U=null;return toast(r.error)}S=r.state;st('u',U);net(true);draw()}
+  catch(e){U=null;toast('Sin conexión')}
+}
+function logout(){U=null;S=null;st('u',null);draw()}
+async function sync(){
+  if(!U||busy)return;busy=true;
+  try{
+    const r=await call(Q.slice());
+    if(!r.ok){toast(r.error);if(/PIN/.test(r.error))logout()}
+    else{Q=Q.filter(e=>!r.done.includes(e.id_evento));st('q',Q);S=r.state;net(true)}
+  }catch(e){net(false)}
+  busy=false;draw();
+}
+function push(ev){ev.id_evento=uid();ev.ts=Date.now();Q.push(ev);st('q',Q);toast(navigator.onLine?'Registrado':'Guardado sin conexión');draw();sync()}
+
+const mins=()=>(Date.now()-new Date(S.config.HORA_INICIO))/60000;
+const opts=()=>S.productos.map(p=>`<option value="${p.id_producto}" ${view.prod==p.id_producto?'selected':''}>${p.id_producto} · ${p.nombre}</option>`).join('');
+const area=id=>(S.areas.find(a=>a.id_area==id)||{nombre:id}).nombre;
+
+function nuevo(){const pr=G('np').value,q=+G('nq').value;if(!q)return toast('Indica la cantidad');view.prod=pr;
+  push({accion:'CREA_LOTE',id_lote:pr+'-'+S.yo.area_actual+'-'+uid().slice(-4).toUpperCase(),id_producto:pr,id_area:S.yo.area_actual,cantidad:q})}
+const recibe=(l,p)=>push({accion:'ENTRA',id_lote:l,id_producto:p,id_area:S.yo.area_actual});
+function sale(l,p){const q=+G('q'+l).value;if(!(q>=0))return toast('Cantidad inválida');push({accion:'SALE',id_lote:l,id_producto:p,id_area:S.yo.area_actual,cantidad:q})}
+function defecto(l,p){const q=+prompt('Cantidad con defecto');if(q>0)push({accion:'DEFECTO',id_lote:l,id_producto:p,id_area:S.yo.area_actual,cantidad:q})}
+const repone=p=>push({accion:'REPONE_BUFFER',id_area:S.yo.area_actual,id_producto:p});
+const alerta=t=>push({accion:'ALERTA',id_area:S.yo.area_actual,obs:t});
+const atiende=(a,ar)=>push({accion:'ATIENDE',id_area:ar,obs:a});
+const cierra=(a,ar)=>push({accion:'CIERRA',id_area:ar,obs:a});
+const calidad=(l,v)=>push({accion:'CALIDAD',id_lote:l,obs:v});
+const corrida=a=>{if(confirm(a=='INICIAR'?'¿Iniciar la hora de producción?':'¿Detener la corrida?'))push({accion:a})};
+
+function areaView(){
+  const y=S.yo,c=S.config,ar=S.areas.find(a=>a.id_area==y.area_actual)||{id_area:'?',nombre:'Sin área'},id=ar.id_area;
+  const run=c.ESTADO_CORRIDA=='EN_CURSO',B=S.buffers.filter(b=>b.id_area==id),pend=B.filter(b=>b.repuesto!='SI');
+  const avail=S.lotes.filter(l=>l.ubicacion=='SIG:'+id),mine=S.lotes.filter(l=>l.ubicacion=='EN:'+id),p=S.prod[id]||{sale:0,def:0};
+  let h=`<div class=card style="border-left:8px solid ${COL[ar.color]||'#999'}"><h2>${ar.nombre}</h2><small>Operario ${y.id_op} · ${y.nombre} · ${y.rol}${y.estado=='AYUDANDO'?' · AYUDANDO':''}</small><br>Producido: <b>${p.sale}</b> · Defectos: <b>${p.def}</b></div>`;
+  if(!run)h+='<div class=card>Corrida detenida. Espera la orden de inicio.</div>';
+  if(run&&mins()>=+c.ALERTA_REPOSICION_MIN&&pend.length)h+=`<div class=ban>⚠ Repón tus amortiguadores (${pend.length} pendientes)</div>`;
+  if(ar.orden==1)h+=`<div class=card><h2>Nuevo lote</h2><select id=np onchange="view.prod=this.value">${opts()}</select><input id=nq type=number placeholder="Cantidad (tubos)"><button class=g onclick=nuevo()>Crear lote</button></div>`;
+  else h+=`<div class=card><h2>Lotes para recibir (${avail.length})</h2>${avail.map(l=>`<div class=row><span><b>${l.id_lote}</b><br><small>${l.cantidad} u.</small></span><button class="s g" onclick="recibe('${l.id_lote}','${l.id_producto}')">Recibir</button></div>`).join('')||'<small>Nada pendiente de la estación anterior</small>'}</div>`;
+  h+=`<div class=card><h2>En mi estación (${mine.length})</h2>${mine.map(l=>`<div class=row style="flex-wrap:wrap"><span><b>${l.id_lote}</b></span><input id="q${l.id_lote}" type=number value="${l.cantidad}" style="width:90px"><button class="s g" onclick="sale('${l.id_lote}','${l.id_producto}')">Terminado → ${S.areas.find(a=>a.id_area==ar.entrega_a)?area(ar.entrega_a):'P. terminado'}</button><button class="s r" onclick="defecto('${l.id_lote}','${l.id_producto}')">Defecto</button></div>`).join('')||'<small>Sin lotes en proceso</small>'}</div>`;
+  if(B.length){const ps=[...new Set(B.map(b=>b.id_producto))];
+    h+=`<div class=card><h2>Amortiguadores</h2>${ps.map(pr=>{const r=B.filter(b=>b.id_producto==pr),ok=r.every(b=>b.repuesto=='SI');return`<div class=row><span><b>${pr}</b> · ${r.map(b=>b.item+' ('+b.objetivo+')').join(', ')}<br><span class="${ok?'ok':'no'}">${ok?'✔ Repuesto':'✖ Pendiente'}</span></span><button class="s y" onclick="repone('${pr}')">Repuse</button></div>`}).join('')}</div>`}
+  h+=`<div class=card><h2>Pedir apoyo</h2><button class=y onclick="alerta('FALTA_MATERIAL')">2 silbidos · Falta material</button><button class=r onclick="alerta('AYUDA')">Silbido largo · Necesito ayuda</button></div>`;
+  if(y.rol=='POLIVALENTE')h+=`<div class=card><h2>Alertas abiertas (${S.alertas.length})</h2>${S.alertas.map(a=>`<div class=row><span><b>${area(a.area_emisora)}</b> · ${a.tipo}<br><small>${hm(a.timestamp)} · ${a.estado}</small></span>${a.estado=='ABIERTA'?`<button class="s g" onclick="atiende('${a.id_alerta}','${a.area_emisora}')">Voy</button>`:(a.polivalente==y.id_op?`<button class="s x" onclick="cierra('${a.id_alerta}','${a.area_emisora}')">Listo</button>`:'<small>atendida</small>')}</div>`).join('')||'<small>Sin alertas</small>'}</div>`;
+  return h;
+}
+function sup(){
+  const c=S.config,run=c.ESTADO_CORRIDA=='EN_CURSO',pend=S.buffers.filter(b=>b.repuesto!='SI').length,pen=pend*(+c.PENALIZACION_POR_BUFFER||0);
+  const apr=S.lotes.filter(l=>l.ubicacion=='PT'&&l.estado_calidad=='APROBADO').reduce((s,l)=>s+(+l.cantidad||0),0);
+  let h=`<div class=card><h2>Control · ${run?'EN CURSO':'DETENIDA'}</h2>${run?'<button class=r onclick="corrida(\'DETENER\')">Detener</button>':'<button class=g onclick="corrida(\'INICIAR\')">Iniciar hora de producción</button>'}</div>`;
+  h+=`<div class=card><h2>Resultado</h2>PT aprobado: <b>${apr}</b> · Buffers pendientes: <b>${pend}</b> · Penalización: <b>${pen}</b><br>Producto contable: <b>${Math.max(0,apr-pen)}</b></div>`;
+  h+=`<div class=card><h2>Por área</h2><table><tr><th>Área<th>Prod.<th>Def.<th>Buf. pend.</tr>${S.areas.map(a=>{const p=S.prod[a.id_area]||{sale:0,def:0};return`<tr><td>${a.nombre}<td>${p.sale}<td>${p.def}<td>${S.buffers.filter(b=>b.id_area==a.id_area&&b.repuesto!='SI').length}</tr>`}).join('')}</table></div>`;
+  h+=`<div class=card><h2>Alertas abiertas (${S.alertas.length})</h2>${S.alertas.map(a=>`<div class=row><span>${area(a.area_emisora)} · ${a.tipo}</span><small>${a.estado}</small></div>`).join('')||'<small>Ninguna</small>'}</div>`;
+  h+=`<div class=card><h2>Lotes</h2>${S.lotes.map(l=>`<div class=row style="flex-wrap:wrap"><span><b>${l.id_lote}</b><br><small>${l.cantidad} u. · ${l.ubicacion} · ${l.estado_calidad}</small></span><span><button class="s x" onclick="view.trace='${l.id_lote}';draw()">Ver</button> <button class="s g" onclick="calidad('${l.id_lote}','APROBADO')">✔</button> <button class="s r" onclick="calidad('${l.id_lote}','RECHAZADO')">✖</button></span></div>`).join('')||'<small>Sin lotes</small>'}</div>`;
+  if(view.trace)h+=`<div class=card><h2>Trazabilidad · ${view.trace}</h2><table><tr><th>Hora<th>Min<th>Área<th>Acción<th>Op<th>Cant</tr>${(S.eventos||[]).filter(e=>e.id_lote==view.trace).map(e=>`<tr><td>${hm(e.timestamp)}<td>${e.minuto}<td>${area(e.id_area)}<td>${e.accion}<td>${e.id_op}<td>${e.cantidad}</tr>`).join('')}</table></div>`;
+  return h;
+}
+function draw(){
+  const el=$('#app');$('#pend').textContent=Q.length?Q.length+' pend.':'';
+  if(!U){el.innerHTML='<div class=card><h2>Ingreso</h2><input id=i type=number placeholder="N° de operario"><input id=p type=password placeholder="PIN"><button onclick=login()>Entrar</button></div>';return}
+  if(!S){el.innerHTML='<div class=card>Cargando…</div>';return}
+  if(document.activeElement&&/INPUT|SELECT/.test(document.activeElement.tagName))return;
+  el.innerHTML=S.yo.rol=='SUPERVISOR'?sup():areaView();
+}
+setInterval(()=>{let t='--:--';if(S&&S.config.ESTADO_CORRIDA=='EN_CURSO'){const r=Math.max(0,S.config.DURACION_MIN*60-(Date.now()-new Date(S.config.HORA_INICIO))/1000);t=pad(r/60|0)+':'+pad(Math.floor(r%60))}$('#clk').textContent=t},1000);
+setInterval(sync,5000);draw();sync();
+</script></body></html>
